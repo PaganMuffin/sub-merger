@@ -262,6 +262,7 @@ async fn process_video(
         subtitle.to_string(),
     ];
 
+
     for (i, font) in fonts.iter().enumerate() {
         args.push("-attach".to_string());
         args.push(font.clone());
@@ -277,6 +278,10 @@ async fn process_video(
         args.push(format!("-metadata:s:t:{}", i));
         args.push(format!("mimetype={}", mimetype));
     }
+
+    // Ustaw napisy jako domyślne (default)
+    args.push("-disposition:s:0".to_string());
+    args.push("default".to_string());
 
     args.extend_from_slice(&[
         "-map".to_string(),
