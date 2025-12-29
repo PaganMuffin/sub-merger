@@ -1,0 +1,63 @@
+name: Build Tauri App
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+jobs:
+    build:
+        name: Build for ${{ matrix.platform }}
+        runs-on: ${{ matrix.runner }}
+        strategy:
+            matrix:
+                include:
+                    - platform: linux
+                      runner: ubuntu-latest
+                    - platform: windows
+                      runner: windows-latest
+                    - platform: macos-arm64
+                      runner: macos-latest
+                      arch: arm64
+                    - platform: macos-x64
+                      runner: macos-latest
+                      arch: x64
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+            - uses: oven-sh/setup-bun@v1
+              with:
+                  bun-version: latest
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: |
+                      x86_64-unknown-linux-gnu
+                      x86_64-pc-windows-msvc
+                      aarch64-apple-darwin
+                      x86_64-apple-darwin
+            - name: Install dependencies
+              run: bun install
+            - name: Install Tauri CLI
+              run: bun add -g @tauri-apps/cli
+            - name: Build Tauri app
+              run: |
+                  if [ "${{ matrix.platform }}" = "macos-arm64" ]; then
+                    export CARGO_BUILD_TARGET=aarch64-apple-darwin
+                  elif [ "${{ matrix.platform }}" = "macos-x64" ]; then
+                    export CARGO_BUILD_TARGET=x86_64-apple-darwin
+                  elif [ "${{ matrix.platform }}" = "linux" ]; then
+                    export CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu
+                  elif [ "${{ matrix.platform }}" = "windows" ]; then
+                    export CARGO_BUILD_TARGET=x86_64-pc-windows-msvc
+                  fi
+                  bun run tauri build
+              shell: bash
+            - name: Upload artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: tauri-build-${{ matrix.platform }}
+                  path: src-tauri/target/release/bundle/
