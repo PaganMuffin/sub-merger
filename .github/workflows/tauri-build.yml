@@ -35,6 +35,16 @@ jobs:
                     patchelf \
                     libssl-dev
 
+            - name: Download Linux FFmpeg binaries
+              if: matrix.platform == 'linux'
+              run: |
+                  mkdir -p src-tauri/binaries
+                  wget -O ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+                  tar -xf ffmpeg.tar.xz
+                  cp ffmpeg-*-amd64-static/ffmpeg src-tauri/binaries/
+                  cp ffmpeg-*-amd64-static/ffprobe src-tauri/binaries/
+                  rm -rf ffmpeg.tar.xz ffmpeg-*-amd64-static
+
             - name: Download Windows FFmpeg binaries
               if: matrix.platform == 'windows'
               run: |
@@ -99,6 +109,8 @@ jobs:
         needs: build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
+        permissions:
+            contents: write
         steps:
             - name: Download all artifacts
               uses: actions/download-artifact@v4
