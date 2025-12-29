@@ -41,16 +41,18 @@ jobs:
                     patchelf \
                     libssl-dev
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: "20"
-                  cache: "npm"
-
             - name: Setup Bun
               uses: oven-sh/setup-bun@v2
               with:
                   bun-version: latest
+
+            - name: Cache Bun dependencies
+              uses: actions/cache@v4
+              with:
+                  path: ~/.bun/install/cache
+                  key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
+                  restore-keys: |
+                      ${{ runner.os }}-bun-
 
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@stable
@@ -97,6 +99,7 @@ jobs:
                       src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
                       src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
                   if-no-files-found: error
+
     release:
         needs: build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
