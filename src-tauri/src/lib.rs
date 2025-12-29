@@ -3,6 +3,9 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
+// Dodajemy importy makr logowania
+use tauri_plugin_log::log::{debug, error, info, warn};
+use tauri_plugin_log::{Target, TargetKind};
 
 #[derive(Clone, Serialize)]
 struct ProgressUpdate {
@@ -33,6 +36,7 @@ static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 fn cancel_processing() {
+    info!("User requested cancellation");
     CANCEL_FLAG.store(true, Ordering::Relaxed);
 }
 
@@ -44,20 +48,22 @@ async fn process_queue(
     fonts: Vec<String>,
     output_dir: String,
 ) -> Result<(), String> {
-    println!("=== Starting process_queue ===");
-    println!("Videos: {:?}", videos);
-    println!("Subtitles: {:?}", subtitles);
-    println!("Fonts: {:?}", fonts);
-    println!("Output dir: {}", output_dir);
+    info!("=== Starting process_queue ===");
+    // Używamy debug! dla dużych struktur danych, aby nie zaśmiecać głównego logu
+    debug!("Videos: {:?}", videos);
+    debug!("Subtitles: {:?}", subtitles);
+    debug!("Fonts: {:?}", fonts);
+    info!("Output dir: {}", output_dir);
 
     // Reset cancel flag
     CANCEL_FLAG.store(false, Ordering::Relaxed);
 
     for (index, (video, subtitle)) in videos.iter().zip(subtitles.iter()).enumerate() {
-        println!("Processing video {} of {}", index + 1, videos.len());
+        info!("Processing video {} of {}", index + 1, videos.len());
 
         // Check if cancelled
         if CANCEL_FLAG.load(Ordering::Relaxed) {
+            warn!("Processing loop interrupted by user cancellation");
             return Err("Processing cancelled by user".to_string());
         }
 
@@ -67,15 +73,15 @@ async fn process_queue(
             .unwrap_or("output")
             .to_string();
 
-        println!("Getting duration for: {}", video);
+        info!("Getting duration for: {}", video);
         // Get duration first
         let duration_us = match get_duration(&app, video).await {
             Ok(d) => {
-                println!("Got duration: {} microseconds", d);
+                debug!("Got duration: {} microseconds", d);
                 d
             }
             Err(e) => {
-                println!("Failed to get duration: {}", e);
+                error!("Failed to get duration for {}: {}", filename, e);
                 app.emit(
                     "ffmpeg-error",
                     ProcessError {
@@ -93,8 +99,8 @@ async fn process_queue(
         let output_path =
             std::path::Path::new(&output_dir).join(format!("{}_merged.mkv", filename));
 
-        println!("Starting FFmpeg processing for: {}", filename);
-        println!("Output path: {:?}", output_path);
+        info!("Starting FFmpeg processing for: {}", filename);
+        debug!("Output path: {:?}", output_path);
 
         // Process video
         match process_video(
@@ -110,10 +116,12 @@ async fn process_queue(
         .await
         {
             Ok(_) => {
+                info!("Successfully processed: {}", filename);
                 app.emit("ffmpeg-complete", serde_json::json!({ "index": index }))
                     .ok();
             }
             Err(e) => {
+                error!("Error processing {}: {}", filename, e);
                 app.emit(
                     "ffmpeg-error",
                     ProcessError {
@@ -127,6 +135,7 @@ async fn process_queue(
         }
     }
 
+    info!("Queue processing finished");
     Ok(())
 }
 
@@ -140,24 +149,24 @@ fn get_sidecar_path(
         .resource_dir()
         .map_err(|e| format!("Failed to get resource directory: {}", e))?;
 
-    println!("Resource directory: {:?}", resource_dir);
+    debug!("Resource directory: {:?}", resource_dir);
 
     // Try multiple possible binary names
     let possible_names = if cfg!(target_os = "windows") {
         vec![
-            format!("{}.exe", binary_name),                        // ffmpeg.exe
-            format!("{}-x86_64-pc-windows-msvc.exe", binary_name), // ffmpeg-x86_64-pc-windows-msvc.exe
+            format!("{}.exe", binary_name),
+            format!("{}-x86_64-pc-windows-msvc.exe", binary_name),
         ]
     } else if cfg!(target_os = "linux") {
         vec![
-            binary_name.to_string(),                             // ffmpeg
-            format!("{}-x86_64-unknown-linux-gnu", binary_name), // ffmpeg-x86_64-unknown-linux-gnu
+            binary_name.to_string(),
+            format!("{}-x86_64-unknown-linux-gnu", binary_name),
         ]
     } else if cfg!(target_os = "macos") {
         vec![
-            binary_name.to_string(),                         // ffmpeg
-            format!("{}-x86_64-apple-darwin", binary_name),  // ffmpeg-x86_64-apple-darwin
-            format!("{}-aarch64-apple-darwin", binary_name), // ffmpeg-aarch64-apple-darwin
+            binary_name.to_string(),
+            format!("{}-x86_64-apple-darwin", binary_name),
+            format!("{}-aarch64-apple-darwin", binary_name),
         ]
     } else {
         return Err("Unsupported platform".to_string());
@@ -166,10 +175,11 @@ fn get_sidecar_path(
     // Try each possible name
     for name in possible_names {
         let binary_path = resource_dir.join(&name);
-        println!("Checking for binary at: {:?}", binary_path);
+        // Używamy debug, bo to pętla sprawdzająca, nie chcemy spamu w Info
+        debug!("Checking for binary at: {:?}", binary_path);
 
         if binary_path.exists() {
-            println!("Found binary at: {:?}", binary_path);
+            info!("Found binary at: {:?}", binary_path);
 
             // Make sure it's executable on Unix systems
             #[cfg(unix)]
@@ -187,18 +197,18 @@ fn get_sidecar_path(
         }
     }
 
-    Err(format!(
+    let err_msg = format!(
         "Binary '{}' not found in resource directory: {:?}",
         binary_name, resource_dir
-    ))
+    );
+    error!("{}", err_msg);
+    Err(err_msg)
 }
 
 async fn get_duration(app: &tauri::AppHandle, input: &str) -> Result<f64, String> {
-    println!("get_duration called for: {}", input);
+    debug!("get_duration called for: {}", input);
 
     let ffprobe_path = get_sidecar_path(app, "ffprobe")?;
-
-    println!("Using ffprobe at: {:?}", ffprobe_path);
 
     let output = Command::new(&ffprobe_path)
         .args(&[
@@ -213,10 +223,9 @@ async fn get_duration(app: &tauri::AppHandle, input: &str) -> Result<f64, String
         .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!(
-            "ffprobe failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("ffprobe failed: {}", stderr);
+        return Err(format!("ffprobe failed: {}", stderr));
     }
 
     let probe: ProbeOutput = serde_json::from_slice(&output.stdout)
@@ -243,8 +252,6 @@ async fn process_video(
 ) -> Result<(), String> {
     let ffmpeg_path = get_sidecar_path(app, "ffmpeg")?;
 
-    println!("Using ffmpeg at: {:?}", ffmpeg_path);
-
     // Build FFmpeg arguments
     let mut args = vec![
         "-progress".to_string(),
@@ -255,7 +262,6 @@ async fn process_video(
         subtitle.to_string(),
     ];
 
-    // Attach all fonts and add mimetype metadata
     for (i, font) in fonts.iter().enumerate() {
         args.push("-attach".to_string());
         args.push(font.clone());
@@ -272,7 +278,6 @@ async fn process_video(
         args.push(format!("mimetype={}", mimetype));
     }
 
-    // Map all streams and copy codecs
     args.extend_from_slice(&[
         "-map".to_string(),
         "0".to_string(),
@@ -283,6 +288,8 @@ async fn process_video(
         "-y".to_string(),
         output.to_string(),
     ]);
+
+    debug!("Spawning ffmpeg with args: {:?}", args);
 
     let mut child = Command::new(&ffmpeg_path)
         .args(&args)
@@ -298,19 +305,22 @@ async fn process_video(
 
     // Parse progress
     for line in reader.lines() {
-        // Check for cancellation
         if CANCEL_FLAG.load(Ordering::Relaxed) {
+            info!("Killing FFmpeg process due to cancellation");
             child.kill().ok();
             return Err("Cancelled by user".to_string());
         }
 
         let line = line.map_err(|e| e.to_string())?;
 
+        // Opcjonalnie: loguj każdą linię postępu tylko na poziomie TRACE (jeśli włączone)
+        // log::trace!("FFmpeg progress: {}", line);
+
         if line.starts_with("out_time_us=") {
             if let Some(time_str) = line.strip_prefix("out_time_us=") {
                 if let Ok(time_us) = time_str.parse::<f64>() {
                     let percentage = (time_us / duration_us * 100.0).min(100.0);
-
+                    
                     app_clone
                         .emit(
                             "ffmpeg-progress",
@@ -329,6 +339,7 @@ async fn process_video(
     let status = child.wait().map_err(|e| e.to_string())?;
 
     if !status.success() {
+        error!("FFmpeg process exited with status: {}", status);
         return Err("FFmpeg process failed".to_string());
     }
 
@@ -341,9 +352,17 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
-                .target(tauri_plugin_log::Target::LogDir {
-                    file_name: Some("sub-merger.log".to_string()),
-                })
+                // Ustawiamy cel logowania
+                .targets([
+                    // Loguj do standardowego wyjścia (terminala) - przydatne przy developmencie
+                    Target::new(TargetKind::Stdout),
+                    // Loguj do pliku w folderze logów systemu
+                    // Windows: %APPDATA%/com.identifier.app/logs/sub-merger.log
+                    // Linux: ~/.cache/com.identifier.app/logs/sub-merger.log
+                    Target::new(TargetKind::LogDir { 
+                        file_name: Some("sub-merger.log".into()) 
+                    }),
+                ])
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
