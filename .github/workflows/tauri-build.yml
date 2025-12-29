@@ -20,15 +20,12 @@ jobs:
                     - platform: windows
                       runner: windows-latest
                       target: x86_64-pc-windows-msvc
-                    - platform: macos-arm64
-                      runner: macos-latest
-                      target: aarch64-apple-darwin
-                    - platform: macos-x64
-                      runner: macos-15
-                      target: x86_64-apple-darwin
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
+
+            - name: Create binaries directory
+              run: mkdir -p src-tauri/binaries
 
             - name: Install Linux system dependencies
               if: matrix.platform == 'linux'
@@ -40,6 +37,17 @@ jobs:
                     librsvg2-dev \
                     patchelf \
                     libssl-dev
+
+            - name: Download Windows FFmpeg binaries
+              if: matrix.platform == 'windows'
+              run: |
+                  New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
+                  Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
+                  Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-temp"
+                  $ffmpegDir = Get-ChildItem -Path "ffmpeg-temp" -Directory | Select-Object -First 1
+                  Copy-Item "$ffmpegDir/bin/ffmpeg.exe" "src-tauri/binaries/ffmpeg.exe"
+                  Copy-Item "$ffmpegDir/bin/ffprobe.exe" "src-tauri/binaries/ffprobe.exe"
+                  Remove-Item -Recurse -Force "ffmpeg.zip", "ffmpeg-temp"
 
             - name: Setup Bun
               uses: oven-sh/setup-bun@v2
@@ -88,16 +96,6 @@ jobs:
                   path: |
                       src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
                       src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
-                  if-no-files-found: error
-
-            - name: Upload artifacts (macOS)
-              if: startsWith(matrix.platform, 'macos')
-              uses: actions/upload-artifact@v4
-              with:
-                  name: tauri-build-${{ matrix.platform }}
-                  path: |
-                      src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-                      src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
                   if-no-files-found: error
 
     release:

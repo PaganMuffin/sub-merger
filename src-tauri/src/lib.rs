@@ -141,10 +141,15 @@ async fn get_duration(_app: &tauri::AppHandle, input: &str) -> Result<f64, Strin
     
     // If we're already in src-tauri directory, use binaries/ directly
     // Otherwise, use src-tauri/binaries/
-    let ffprobe_path = if cwd.ends_with("src-tauri") {
-        cwd.join("binaries/ffprobe-x86_64-unknown-linux-gnu")
+    let ffprobe_name = if cfg!(windows) {
+        "ffprobe.exe"
     } else {
-        cwd.join("src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu")
+        "ffprobe-x86_64-unknown-linux-gnu"
+    };
+    let ffprobe_path = if cwd.ends_with("src-tauri") {
+        cwd.join(format!("binaries/{}", ffprobe_name))
+    } else {
+        cwd.join(format!("src-tauri/binaries/{}", ffprobe_name))
     };
     
     println!("FFprobe path: {:?}", ffprobe_path);
@@ -203,10 +208,15 @@ async fn process_video(
     
     // If we're already in src-tauri directory, use binaries/ directly
     // Otherwise, use src-tauri/binaries/
-    let ffmpeg_path = if cwd.ends_with("src-tauri") {
-        cwd.join("binaries/ffmpeg-x86_64-unknown-linux-gnu")
+    let ffmpeg_name = if cfg!(windows) {
+        "ffmpeg.exe"
     } else {
-        cwd.join("src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu")
+        "ffmpeg-x86_64-unknown-linux-gnu"
+    };
+    let ffmpeg_path = if cwd.ends_with("src-tauri") {
+        cwd.join(format!("binaries/{}", ffmpeg_name))
+    } else {
+        cwd.join(format!("src-tauri/binaries/{}", ffmpeg_name))
     };
     
     if !ffmpeg_path.exists() {
