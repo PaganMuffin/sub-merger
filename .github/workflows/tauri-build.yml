@@ -59,7 +59,7 @@ jobs:
                   elif [ "${{ matrix.platform }}" = "windows" ]; then
                     export CARGO_BUILD_TARGET=x86_64-pc-windows-msvc
                   fi
-                  bun run tauri build
+                  bun run tauri build --target $CARGO_BUILD_TARGET
               shell: bash
             - name: Upload artifacts
               uses: actions/upload-artifact@v4
