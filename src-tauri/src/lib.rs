@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize)]
