@@ -41,20 +41,42 @@ jobs:
                   mkdir -p src-tauri/binaries
                   wget -O ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
                   tar -xf ffmpeg.tar.xz
-                  cp ffmpeg-*-amd64-static/ffmpeg src-tauri/binaries/
-                  cp ffmpeg-*-amd64-static/ffprobe src-tauri/binaries/
-                  rm -rf ffmpeg.tar.xz ffmpeg-*-amd64-static
+                  FFMPEG_DIR=$(find . -maxdepth 1 -type d -name "ffmpeg-*-amd64-static" | head -n 1)
+                  cp "$FFMPEG_DIR/ffmpeg" src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
+                  cp "$FFMPEG_DIR/ffprobe" src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu
+                  chmod +x src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
+                  chmod +x src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu
+                  rm -rf ffmpeg.tar.xz "$FFMPEG_DIR"
 
             - name: Download Windows FFmpeg binaries
               if: matrix.platform == 'windows'
+              shell: pwsh
               run: |
                   New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
+
+                  # Pobierz FFmpeg
                   Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
-                  Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-temp"
+
+                  # Rozpakuj archiwum
+                  Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-temp" -Force
+
+                  # Znajdź katalog z FFmpeg
                   $ffmpegDir = Get-ChildItem -Path "ffmpeg-temp" -Directory | Select-Object -First 1
-                  Copy-Item "$ffmpegDir/bin/ffmpeg.exe" "src-tauri/binaries/ffmpeg.exe"
-                  Copy-Item "$ffmpegDir/bin/ffprobe.exe" "src-tauri/binaries/ffprobe.exe"
+
+                  # Skopiuj i zmień nazwy plików binarnych
+                  Copy-Item "$($ffmpegDir.FullName)/bin/ffmpeg.exe" "src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
+                  Copy-Item "$($ffmpegDir.FullName)/bin/ffprobe.exe" "src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe"
+
+                  # Wyczyść tymczasowe pliki
                   Remove-Item -Recurse -Force "ffmpeg.zip", "ffmpeg-temp"
+
+                  # Zweryfikuj, że pliki zostały utworzone
+                  if (-not (Test-Path "src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe")) {
+                      throw "FFmpeg binary not found after download"
+                  }
+                  if (-not (Test-Path "src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe")) {
+                      throw "FFprobe binary not found after download"
+                  }
 
             - name: Setup Bun
               uses: oven-sh/setup-bun@v2

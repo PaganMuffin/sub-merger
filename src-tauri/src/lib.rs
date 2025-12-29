@@ -130,33 +130,55 @@ async fn process_queue(
     Ok(())
 }
 
-async fn get_duration(_app: &tauri::AppHandle, input: &str) -> Result<f64, String> {
+fn get_sidecar_path(app: &tauri::AppHandle, binary_name: &str) -> Result<std::path::PathBuf, String> {
+    // Get the resource directory where sidecars are bundled
+    let resource_dir = app.path()
+        .resource_dir()
+        .map_err(|e| format!("Failed to get resource directory: {}", e))?;
+    
+    // Construct the binary name based on platform
+    let target = if cfg!(target_os = "windows") {
+        "x86_64-pc-windows-msvc"
+    } else if cfg!(target_os = "linux") {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(target_os = "macos") {
+        "x86_64-apple-darwin" // lub aarch64-apple-darwin dla ARM
+    } else {
+        return Err("Unsupported platform".to_string());
+    };
+    
+    let extension = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let full_binary_name = format!("{}-{}{}", binary_name, target, extension);
+    
+    let binary_path = resource_dir.join(&full_binary_name);
+    
+    println!("Looking for binary at: {:?}", binary_path);
+    
+    if !binary_path.exists() {
+        return Err(format!("Binary not found at: {:?}", binary_path));
+    }
+    
+    // Make sure it's executable on Unix systems
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::metadata(&binary_path)
+            .map_err(|e| format!("Failed to get metadata: {}", e))?;
+        let mut perms = metadata.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&binary_path, perms)
+            .map_err(|e| format!("Failed to set permissions: {}", e))?;
+    }
+    
+    Ok(binary_path)
+}
+
+async fn get_duration(app: &tauri::AppHandle, input: &str) -> Result<f64, String> {
     println!("get_duration called for: {}", input);
     
-    // Use ffprobe from system binaries directory
-    let mut cwd = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let ffprobe_path = get_sidecar_path(app, "ffprobe")?;
     
-    println!("Current directory: {:?}", cwd);
-    
-    // If we're already in src-tauri directory, use binaries/ directly
-    // Otherwise, use src-tauri/binaries/
-    let ffprobe_name = if cfg!(windows) {
-        "ffprobe.exe"
-    } else {
-        "ffprobe-x86_64-unknown-linux-gnu"
-    };
-    let ffprobe_path = if cwd.ends_with("src-tauri") {
-        cwd.join(format!("binaries/{}", ffprobe_name))
-    } else {
-        cwd.join(format!("src-tauri/binaries/{}", ffprobe_name))
-    };
-    
-    println!("FFprobe path: {:?}", ffprobe_path);
-    
-    if !ffprobe_path.exists() {
-        return Err(format!("FFprobe binary not found at: {:?}", ffprobe_path));
-    }
+    println!("Using ffprobe at: {:?}", ffprobe_path);
 
     let output = Command::new(&ffprobe_path)
         .args(&[
@@ -202,26 +224,9 @@ async fn process_video(
     duration_us: f64,
     filename: &str,
 ) -> Result<(), String> {
-    // Use ffmpeg from system binaries directory
-    let mut cwd = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let ffmpeg_path = get_sidecar_path(app, "ffmpeg")?;
     
-    // If we're already in src-tauri directory, use binaries/ directly
-    // Otherwise, use src-tauri/binaries/
-    let ffmpeg_name = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg-x86_64-unknown-linux-gnu"
-    };
-    let ffmpeg_path = if cwd.ends_with("src-tauri") {
-        cwd.join(format!("binaries/{}", ffmpeg_name))
-    } else {
-        cwd.join(format!("src-tauri/binaries/{}", ffmpeg_name))
-    };
-    
-    if !ffmpeg_path.exists() {
-        return Err(format!("FFmpeg binary not found at: {:?}", ffmpeg_path));
-    }
+    println!("Using ffmpeg at: {:?}", ffmpeg_path);
 
     // Build FFmpeg arguments
     let mut args = vec![
@@ -326,4 +331,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

@@ -32,9 +32,9 @@
             "icons/128x128.png",
             "icons/128x128@2x.png",
             "icons/icon.icns",
-            "icons/icon.ico"
+            "icon.ico"
         ],
         "resources": [],
-        "externalBin": ["ffmpeg", "ffprobe"]
+        "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"]
     }
 }
