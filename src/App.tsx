@@ -30,7 +30,11 @@ function App() {
         const sxe = filename.match(/S\d{2,3}E(\d{2,3})/i);
         if (sxe) return parseInt(sxe[1], 10);
 
-        // 4. - 01 (np. Oshi no Ko - 01 ...)
+        // 4. - 01v2 (ignoruj v2, v3 itp.)
+        const dashWithVersion = filename.match(/-\s*(\d{2,3})v\d+\b/i);
+        if (dashWithVersion) return parseInt(dashWithVersion[1], 10);
+
+        // 5. - 01 (np. Oshi no Ko - 01 ...)
         const dash = filename.match(/-\s*(\d{2,3})\b/);
         if (dash) return parseInt(dash[1], 10);
 

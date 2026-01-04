@@ -29,6 +29,7 @@ struct ProbeFormat {
 #[derive(Deserialize)]
 struct ProbeOutput {
     format: ProbeFormat,
+    streams: Option<Vec<serde_json::Value>>,
 }
 
 // Global cancellation flag
@@ -73,20 +74,20 @@ async fn process_queue(
             .unwrap_or("output")
             .to_string();
 
-        info!("Getting duration for: {}", video);
-        // Get duration first
-        let duration_us = match get_duration(&app, video).await {
-            Ok(d) => {
-                debug!("Got duration: {} microseconds", d);
-                d
+        info!("Getting video info for: {}", video);
+        // Get duration and stream count in one call
+        let (duration_us, stream_count) = match get_video_info(&app, video).await {
+            Ok(info) => {
+                debug!("Got duration: {} microseconds, streams: {}", info.0, info.1);
+                info
             }
             Err(e) => {
-                error!("Failed to get duration for {}: {}", filename, e);
+                error!("Failed to get video info for {}: {}", filename, e);
                 app.emit(
                     "ffmpeg-error",
                     ProcessError {
                         index,
-                        error: format!("Failed to get duration: {}", e),
+                        error: format!("Failed to get video info: {}", e),
                         filename: filename.clone(),
                     },
                 )
@@ -97,7 +98,7 @@ async fn process_queue(
 
         // Build output path
         let output_path =
-            std::path::Path::new(&output_dir).join(format!("{}_merged.mkv", filename));
+            std::path::Path::new(&output_dir).join(format!("{}.mkv", filename));
 
         info!("Starting FFmpeg processing for: {}", filename);
         debug!("Output path: {:?}", output_path);
@@ -111,6 +112,7 @@ async fn process_queue(
             &fonts,
             &output_path.to_string_lossy(),
             duration_us,
+            stream_count,
             &filename,
         )
         .await
@@ -205,8 +207,8 @@ fn get_sidecar_path(
     Err(err_msg)
 }
 
-async fn get_duration(app: &tauri::AppHandle, input: &str) -> Result<f64, String> {
-    debug!("get_duration called for: {}", input);
+async fn get_video_info(app: &tauri::AppHandle, input: &str) -> Result<(f64, usize), String> {
+    debug!("get_video_info called for: {}", input);
 
     let ffprobe_path = get_sidecar_path(app, "ffprobe")?;
 
@@ -217,6 +219,7 @@ async fn get_duration(app: &tauri::AppHandle, input: &str) -> Result<f64, String
             "-print_format",
             "json",
             "-show_format",
+            "-show_streams",
             input,
         ])
         .output()
@@ -232,12 +235,17 @@ async fn get_duration(app: &tauri::AppHandle, input: &str) -> Result<f64, String
         .map_err(|e| format!("Failed to parse ffprobe output: {}", e))?;
 
     let duration_str = probe.format.duration.ok_or("No duration found in video")?;
-
     let duration_sec: f64 = duration_str
         .parse()
         .map_err(|e| format!("Failed to parse duration: {}", e))?;
+    let duration_us = duration_sec * 1_000_000.0; // Convert to microseconds
 
-    Ok(duration_sec * 1_000_000.0) // Convert to microseconds
+    let stream_count = probe.streams
+        .as_ref()
+        .map(|s| s.len())
+        .ok_or("No streams found in video")?;
+
+    Ok((duration_us, stream_count))
 }
 
 async fn process_video(
@@ -248,9 +256,12 @@ async fn process_video(
     fonts: &[String],
     output: &str,
     duration_us: f64,
+    video_stream_count: usize,
     filename: &str,
 ) -> Result<(), String> {
     let ffmpeg_path = get_sidecar_path(app, "ffmpeg")?;
+
+    debug!("Video has {} streams", video_stream_count);
 
     // Build FFmpeg arguments
     let mut args = vec![
@@ -262,10 +273,26 @@ async fn process_video(
         subtitle.to_string(),
     ];
 
-
-    for (i, font) in fonts.iter().enumerate() {
+    // Add all font attachments
+    for font in fonts.iter() {
         args.push("-attach".to_string());
         args.push(font.clone());
+    }
+
+    args.extend_from_slice(&[
+        "-map".to_string(),
+        "0:v".to_string(),  // Only video streams from input 0
+        "-map".to_string(),
+        "0:a".to_string(),  // Only audio streams from input 0
+        "-map".to_string(),
+        "1".to_string(),    // Subtitle from input 1
+    ]);
+
+    // Set mimetype for each font attachment
+    // Count streams: we need to count video + audio streams only (no old subtitles/attachments)
+    // For simplicity, we'll use a different approach - set mimetype by relative attachment index
+    let first_attachment_index = 0; // Attachments are indexed separately in output
+    for (i, font) in fonts.iter().enumerate() {
         let ext = std::path::Path::new(font)
             .extension()
             .and_then(|s| s.to_str())
@@ -275,21 +302,18 @@ async fn process_video(
             "otf" => "application/vnd.ms-opentype",
             _ => "application/octet-stream",
         };
+        
+        // Use attachment index directly
         args.push(format!("-metadata:s:t:{}", i));
         args.push(format!("mimetype={}", mimetype));
     }
 
-    // Ustaw napisy jako domyślne (default)
-    args.push("-disposition:s:0".to_string());
-    args.push("default".to_string());
-
     args.extend_from_slice(&[
-        "-map".to_string(),
-        "0".to_string(),
-        "-map".to_string(),
-        "1".to_string(),
         "-c".to_string(),
         "copy".to_string(),
+        // Ustaw napisy jako domyślne (default)
+        "-disposition:s:0".to_string(),
+        "default".to_string(),
         "-y".to_string(),
         output.to_string(),
     ]);
@@ -308,6 +332,9 @@ async fn process_video(
     let app_clone = app.clone();
     let filename_clone = filename.to_string();
 
+    // Collect all stderr lines for potential error reporting
+    let mut all_stderr = Vec::new();
+
     // Parse progress
     for line in reader.lines() {
         if CANCEL_FLAG.load(Ordering::Relaxed) {
@@ -317,6 +344,9 @@ async fn process_video(
         }
 
         let line = line.map_err(|e| e.to_string())?;
+
+        // Store all stderr output
+        all_stderr.push(line.clone());
 
         // Opcjonalnie: loguj każdą linię postępu tylko na poziomie TRACE (jeśli włączone)
         // log::trace!("FFmpeg progress: {}", line);
@@ -345,7 +375,22 @@ async fn process_video(
 
     if !status.success() {
         error!("FFmpeg process exited with status: {}", status);
-        return Err("FFmpeg process failed".to_string());
+        
+        // Log the last 20 lines of stderr for debugging
+        let stderr_tail: Vec<_> = all_stderr.iter().rev().take(20).rev().collect();
+        error!("FFmpeg stderr (last 20 lines):");
+        for line in &stderr_tail {
+            error!("  {}", line);
+        }
+        
+        // Return error with some context
+        let error_context = if stderr_tail.len() > 0 {
+            stderr_tail.last().map(|s| s.as_str()).unwrap_or("Unknown error")
+        } else {
+            "No stderr output captured"
+        };
+        
+        return Err(format!("FFmpeg failed with status {}: {}", status, error_context));
     }
 
     Ok(())
