@@ -16,6 +16,28 @@ interface ProcessError {
 }
 
 function App() {
+    // Wyodrębnianie tytułu z nazwy pliku (usunięcie części w nawiasach kwadratowych i rozdzielczości)
+    function extractTitle(filename: string): string {
+        // Usuń rozszerzenie
+        let name = filename.replace(/\.[^/.]+$/, "");
+        // Usuń części w nawiasach kwadratowych
+        name = name.replace(/\[([^\]]+)\]/g, "").trim();
+        // Usuń informacje o rozdzielczości i codecach
+        name = name.replace(/\d{3,4}p.*$/i, "").trim();
+        name = name.replace(/\(.*?\)/g, "").trim();
+        // Usuń numer odcinka (- 01, - 01v2, itp.)
+        name = name.replace(/-\s*\d{2,3}(v\d+)?\s*$/, "").trim();
+        // Usuń wielokrotne spacje
+        name = name.replace(/\s+/g, " ").trim();
+        return name;
+    }
+
+    // Wyodrębnianie prefixu (tekst w pierwszych nawiasach kwadratowych)
+    function extractPrefix(filename: string): string {
+        const match = filename.match(/\[([^\]]+)\]/);
+        return match ? match[1] : "";
+    }
+
     // Wyodrębnianie numeru odcinka z nazwy pliku
     function extractEpisodeNumber(filename: string): number | null {
         // 1. [Nekomoe ...] ... [01]...
@@ -71,9 +93,17 @@ function App() {
         setSubtitles((prev) => moveItem(prev, from, to));
     const moveFont = (from: number, to: number) =>
         setFonts((prev) => moveItem(prev, from, to));
+
+    const [mode, setMode] = useState<"ffmpeg" | "json">("ffmpeg");
     const [videos, setVideos] = useState<string[]>([]);
     const [subtitles, setSubtitles] = useState<string[]>([]);
     const [fonts, setFonts] = useState<string[]>([]);
+    const [fontsFolder, setFontsFolder] = useState<string>("");
+    const [title, setTitle] = useState<string>("");
+    const [prefix, setPrefix] = useState<string>("");
+    const [resolution, setResolution] = useState<"480p" | "720p" | "1080p">(
+        "1080p"
+    );
     const [isProcessing, setIsProcessing] = useState(false);
     const [progress, setProgress] = useState<Map<number, number>>(new Map());
     const [errors, setErrors] = useState<Map<number, string>>(new Map());
@@ -111,12 +141,35 @@ function App() {
         if (selected) {
             const files = Array.isArray(selected) ? selected : [selected];
             if (type === "video") {
-                setVideos((prev) => [...prev, ...files]);
+                setVideos((prev) => {
+                    const newVideos = [...prev, ...files];
+                    // Auto-extract title and prefix from first video
+                    if (
+                        prev.length === 0 &&
+                        files.length > 0 &&
+                        mode === "json"
+                    ) {
+                        const firstFile = files[0].split(/[\\/]/).pop() || "";
+                        setTitle(extractTitle(firstFile));
+                        setPrefix(extractPrefix(firstFile));
+                    }
+                    return newVideos;
+                });
             } else if (type === "subtitle") {
                 setSubtitles((prev) => [...prev, ...files]);
             } else if (type === "font") {
                 setFonts((prev) => [...prev, ...files]);
             }
+        }
+    };
+
+    const selectFontsFolder = async () => {
+        const directory = await open({
+            directory: true,
+            multiple: false,
+        });
+        if (directory) {
+            setFontsFolder(directory as string);
         }
     };
 
@@ -149,6 +202,12 @@ function App() {
 
         if (videos.length !== subtitles.length) {
             alert("Liczba plików video musi być równa liczbie napisów");
+            return;
+        }
+
+        if (mode === "json") {
+            // Generate and save JSON
+            await generateJson();
             return;
         }
 
@@ -230,11 +289,132 @@ function App() {
         return path.split(/[\\/]/).pop() || path;
     };
 
+    const generateJson = async () => {
+        const jsonData = {
+            fonts: mode === "json" ? fontsFolder || "fonts" : undefined,
+            title: title || extractTitle(getFilename(videos[0])),
+            prefix: prefix || extractPrefix(getFilename(videos[0])),
+            resolution,
+            items: videos.map((video, index) => ({
+                video: getFilename(video),
+                subtitles: getFilename(subtitles[index]),
+            })),
+        };
+
+        const jsonString = JSON.stringify(jsonData, null, 4);
+
+        // Select folder to save
+        const saveDir = await open({
+            directory: true,
+            multiple: false,
+        });
+
+        if (saveDir && typeof saveDir === "string") {
+            const savePath = `${saveDir}/table.json`;
+            try {
+                await invoke("save_json", {
+                    path: savePath,
+                    content: jsonString,
+                });
+                alert(`Plik JSON zapisany: ${savePath}`);
+            } catch (error) {
+                alert(`Błąd zapisu: ${error}`);
+            }
+        }
+    };
+
     return (
         <div className="app">
             <div className="header">
                 <h1>Sub Merger - Łączenie Video z Napisami</h1>
+                <div className="mode-switch">
+                    <button
+                        className={`mode-btn ${
+                            mode === "ffmpeg" ? "active" : ""
+                        }`}
+                        onClick={() => setMode("ffmpeg")}
+                        disabled={isProcessing}
+                    >
+                        Tryb FFmpeg
+                    </button>
+                    <button
+                        className={`mode-btn ${
+                            mode === "json" ? "active" : ""
+                        }`}
+                        onClick={() => setMode("json")}
+                        disabled={isProcessing}
+                    >
+                        Tryb JSON
+                    </button>
+                </div>
             </div>
+
+            {mode === "json" && (
+                <div className="json-config">
+                    <div className="json-field">
+                        <label>Tytuł:</label>
+                        <input
+                            type="text"
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            placeholder="Auto-wypełniane z pierwszego video"
+                            disabled={isProcessing}
+                        />
+                    </div>
+                    <div className="json-field">
+                        <label>Prefix:</label>
+                        <input
+                            type="text"
+                            value={prefix}
+                            onChange={(e) => setPrefix(e.target.value)}
+                            placeholder="Auto-wypełniane z pierwszego video"
+                            disabled={isProcessing}
+                        />
+                    </div>
+                    <div className="json-field">
+                        <label>Rozdzielczość:</label>
+                        <select
+                            value={resolution}
+                            onChange={(e) =>
+                                setResolution(
+                                    e.target.value as "480p" | "720p" | "1080p"
+                                )
+                            }
+                            disabled={isProcessing}
+                        >
+                            <option value="480p">480p</option>
+                            <option value="720p">720p</option>
+                            <option value="1080p">1080p</option>
+                        </select>
+                    </div>
+                    <div className="json-field">
+                        <label>Folder czcionek:</label>
+                        <div
+                            style={{
+                                display: "flex",
+                                gap: "8px",
+                                alignItems: "center",
+                            }}
+                        >
+                            <input
+                                type="text"
+                                value={fontsFolder}
+                                onChange={(e) => setFontsFolder(e.target.value)}
+                                placeholder="fonts"
+                                disabled={isProcessing}
+                                style={{ flex: 1 }}
+                            />
+                            <button
+                                className="btn btn-secondary"
+                                onClick={selectFontsFolder}
+                                disabled={isProcessing}
+                            >
+                                Wybierz folder
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="main-grid">
                 <div className="top-row">
@@ -426,97 +606,114 @@ function App() {
                         )}
                     </div>
                 </div>
-                <div className="bottom-row">
-                    <div className="drop-zone-container">
-                        <div className="zone-header">
-                            <h2>Czcionki ({fonts.length})</h2>
-                            {fonts.length > 0 && (
-                                <button
-                                    className="btn-add"
+                {mode === "ffmpeg" && (
+                    <div className="bottom-row">
+                        <div className="drop-zone-container">
+                            <div className="zone-header">
+                                <h2>Czcionki ({fonts.length})</h2>
+                                {fonts.length > 0 && (
+                                    <button
+                                        className="btn-add"
+                                        onClick={() => selectFiles("font")}
+                                        disabled={isProcessing}
+                                    >
+                                        + Dodaj więcej
+                                    </button>
+                                )}
+                            </div>
+                            {fonts.length === 0 ? (
+                                <div
+                                    className="drop-zone"
                                     onClick={() => selectFiles("font")}
-                                    disabled={isProcessing}
                                 >
-                                    + Dodaj więcej
-                                </button>
+                                    <div className="drop-icon">🔤</div>
+                                    <div className="drop-text">
+                                        Kliknij, aby wybrać czcionki
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="file-list">
+                                    {fonts.map((font, index) => (
+                                        <div key={index} className="file-item">
+                                            <span
+                                                className="file-item-name"
+                                                title={font}
+                                            >
+                                                {getFilename(font)}
+                                            </span>
+                                            <div className="file-item-actions">
+                                                <button
+                                                    className="file-item-move"
+                                                    title="Góra"
+                                                    onClick={() =>
+                                                        moveFont(
+                                                            index,
+                                                            index - 1
+                                                        )
+                                                    }
+                                                    disabled={
+                                                        isProcessing ||
+                                                        index === 0
+                                                    }
+                                                >
+                                                    ↑
+                                                </button>
+                                                <button
+                                                    className="file-item-move"
+                                                    title="Dół"
+                                                    onClick={() =>
+                                                        moveFont(
+                                                            index,
+                                                            index + 1
+                                                        )
+                                                    }
+                                                    disabled={
+                                                        isProcessing ||
+                                                        index ===
+                                                            fonts.length - 1
+                                                    }
+                                                >
+                                                    ↓
+                                                </button>
+                                                <button
+                                                    className="file-item-remove"
+                                                    onClick={() =>
+                                                        removeFile(
+                                                            "font",
+                                                            index
+                                                        )
+                                                    }
+                                                    disabled={isProcessing}
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
                             )}
                         </div>
-                        {fonts.length === 0 ? (
-                            <div
-                                className="drop-zone"
-                                onClick={() => selectFiles("font")}
-                            >
-                                <div className="drop-icon">🔤</div>
-                                <div className="drop-text">
-                                    Kliknij, aby wybrać czcionki
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="file-list">
-                                {fonts.map((font, index) => (
-                                    <div key={index} className="file-item">
-                                        <span
-                                            className="file-item-name"
-                                            title={font}
-                                        >
-                                            {getFilename(font)}
-                                        </span>
-                                        <div className="file-item-actions">
-                                            <button
-                                                className="file-item-move"
-                                                title="Góra"
-                                                onClick={() =>
-                                                    moveFont(index, index - 1)
-                                                }
-                                                disabled={
-                                                    isProcessing || index === 0
-                                                }
-                                            >
-                                                ↑
-                                            </button>
-                                            <button
-                                                className="file-item-move"
-                                                title="Dół"
-                                                onClick={() =>
-                                                    moveFont(index, index + 1)
-                                                }
-                                                disabled={
-                                                    isProcessing ||
-                                                    index === fonts.length - 1
-                                                }
-                                            >
-                                                ↓
-                                            </button>
-                                            <button
-                                                className="file-item-remove"
-                                                onClick={() =>
-                                                    removeFile("font", index)
-                                                }
-                                                disabled={isProcessing}
-                                            >
-                                                ✕
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
                     </div>
-                </div>
+                )}
             </div>
 
             <div className="controls">
-                <button
-                    className="btn btn-secondary"
-                    onClick={selectOutputDirectory}
-                    disabled={isProcessing}
-                >
-                    Wybierz folder docelowy
-                </button>
-                <span className="output-dir-label">
-                    {outputDir
-                        ? `Wybrany folder: ${outputDir}`
-                        : "(brak wybranego folderu)"}
-                </span>
+                {mode === "ffmpeg" && (
+                    <>
+                        <button
+                            className="btn btn-secondary"
+                            onClick={selectOutputDirectory}
+                            disabled={isProcessing}
+                        >
+                            Wybierz folder docelowy
+                        </button>
+                        <span className="output-dir-label">
+                            {outputDir
+                                ? `Wybrany folder: ${outputDir}`
+                                : "(brak wybranego folderu)"}
+                        </span>
+                    </>
+                )}
                 <button
                     className="btn btn-primary"
                     onClick={startProcessing}
@@ -526,7 +723,11 @@ function App() {
                         subtitles.length === 0
                     }
                 >
-                    {isProcessing ? "Przetwarzanie..." : "Rozpocznij łączenie"}
+                    {isProcessing
+                        ? "Przetwarzanie..."
+                        : mode === "json"
+                        ? "Generuj JSON"
+                        : "Rozpocznij łączenie"}
                 </button>
                 {isProcessing && (
                     <button
