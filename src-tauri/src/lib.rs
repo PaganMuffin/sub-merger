@@ -42,6 +42,15 @@ fn cancel_processing() {
 }
 
 #[tauri::command]
+fn save_json(path: String, content: String) -> Result<(), String> {
+    info!("Saving JSON to: {}", path);
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write JSON file: {}", e))?;
+    info!("JSON saved successfully");
+    Ok(())
+}
+
+#[tauri::command]
 async fn process_queue(
     app: tauri::AppHandle,
     videos: Vec<String>,
@@ -418,7 +427,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![process_queue, cancel_processing])
+        .invoke_handler(tauri::generate_handler![process_queue, cancel_processing, save_json])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
